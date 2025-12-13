@@ -2,12 +2,13 @@ module github.com/MathiasDPX/goarchiver
 
 go 1.25.4
 
+require github.com/internetarchive/gowarc v0.8.96
+
 require (
 	github.com/andybalholm/brotli v1.1.1 // indirect
 	github.com/dolthub/maphash v0.1.0 // indirect
 	github.com/gammazero/deque v1.0.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/internetarchive/gowarc v0.8.96 // indirect
 	github.com/klauspost/compress v1.18.1 // indirect
 	github.com/klauspost/cpuid/v2 v2.0.12 // indirect
 	github.com/maypok86/otter v1.2.4 // indirect

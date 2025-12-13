@@ -5,17 +5,20 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strings"
 	"time"
 
-	"github.com/internetarchive/gowarc"
+	warc "github.com/internetarchive/gowarc"
+	"golang.org/x/net/html"
 )
 
 var (
-	URL_REGEX = regexp.MustCompile(`url\(\s*(['"]?([^'")]+)\1\s*\)`)
-	IMPORT_REGEX = regexp.MustCompile(`@import\s+(?:url\()?['"]([^'"]+)['"]\)?`)
+	// thxx chatgpt
+	URL_REGEX    = regexp.MustCompile(`url\(\s*(?:'([^']*)'|"([^"]*)"|([^)\s]+))\s*\)`)
+	IMPORT_REGEX = regexp.MustCompile(`@import\s+(?:url\(\s*(?:'([^']*)'|"([^"]*)"|([^)\s]+))\s*\)|'([^']*)'|"([^"]*)")`)
 )
 
-func ExtractCssLinks(body string) []string {
+func ExtractCSSLinks(body string) []string {
 	links := make(map[string]struct{})
 
 	for _, match := range URL_REGEX.FindAllStringSubmatch(body, -1) {
@@ -35,7 +38,79 @@ func ExtractCssLinks(body string) []string {
 	return result
 }
 
-func Archive(client *warc.CustomHTTPClient, url string) {
+func getAttr(n *html.Node, key string) string {
+	for _, a := range n.Attr {
+		if a.Key == key {
+			return strings.TrimSpace(a.Val)
+		}
+	}
+	return ""
+}
+
+func parseSrcSet(srcset string) []string {
+	parts := strings.Split(srcset, ",")
+	out := make([]string, 0, len(parts))
+
+	for _, p := range parts {
+		fields := strings.Fields(strings.TrimSpace(p))
+		if len(fields) > 0 {
+			out = append(out, fields[0])
+		}
+	}
+	return out
+}
+
+func ExtractHTMLLinks(body string) []string {
+	links := make(map[string]struct{})
+
+	doc, err := html.Parse(strings.NewReader(body))
+	if err != nil {
+		return nil
+	}
+
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode {
+			switch n.Data {
+			case "img", "script", "iframe", "video", "audio", "source":
+				if src := getAttr(n, "src"); src != "" {
+					links[src] = struct{}{}
+				}
+
+				if srcset := getAttr(n, "srcset"); srcset != "" {
+					for _, u := range parseSrcSet(srcset) {
+						links[u] = struct{}{}
+					}
+				}
+			case "link":
+				rel := strings.ToLower(getAttr(n, "rel"))
+				if rel != "dns-prefetch" {
+					if href := getAttr(n, "href"); href != "" {
+						links[href] = struct{}{}
+					}
+				}
+			case "a":
+				href := getAttr(n, "href")
+				links[href] = struct{}{}
+			}
+		}
+
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+
+	walk(doc)
+
+	result := make([]string, 0, len(links))
+	for link := range links {
+		result = append(result, link)
+	}
+
+	return result
+}
+
+func Archive(client *warc.CustomHTTPClient, url string) []string {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		panic(err)
@@ -50,12 +125,22 @@ func Archive(client *warc.CustomHTTPClient, url string) {
 	}
 	defer resp.Body.Close()
 
-	if resp.Header.Get("content-type") == "text/css" {
-		ExtractCssLinks(string(resp.Body))
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		panic(err)
 	}
 
-	io.Copy(io.Discard, resp.Body)
+	var links []string
+	ct := strings.ToLower(resp.Header.Get("content-type"))
+	if strings.HasPrefix(ct, "text/css") {
+		links = ExtractCSSLinks(string(body))
+	} else if strings.HasPrefix(ct, "text/html") {
+		links = ExtractHTMLLinks(string(body))
+	}
+
 	<-feedbackChan
+
+	return links
 }
 
 func main() {
@@ -63,7 +148,7 @@ func main() {
 		WarcinfoContent: warc.Header{
 			"software": "GoArchiver/1.0",
 		},
-		Compression: "gzip",
+		Compression:        "gzip",
 		WARCWriterPoolSize: 1,
 	}
 
@@ -84,7 +169,9 @@ func main() {
 		DecompressBody:        true,
 		FollowRedirects:       true,
 		VerifyCerts:           true,
-		RandomLocalIP:         true,
+		RandomLocalIP:         false,
+		DisableIPv6:           true,
+		DisableIPv4:           false,
 	}
 
 	client, err := warc.NewWARCWritingHTTPClient(clientSettings)
@@ -92,12 +179,6 @@ func main() {
 		panic(err)
 	}
 	defer client.Close()
-
-	go func() {
-		for err := range client.ErrChan {
-			fmt.Errorf("WARC writer error: %s", err.Err.Error())
-		}
-	}()
 
 	Archive(client, "https://thevalleyofcode.com/")
 }
