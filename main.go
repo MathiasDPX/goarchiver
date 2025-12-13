@@ -220,7 +220,7 @@ func main() {
 		return
 	}
 
-	if len(DOMAIN_WHITELIST) == 1 {
+	if len(whitelist) == 0 {
 		fmt.Println("No domain whitelisted")
 		return
 	}
