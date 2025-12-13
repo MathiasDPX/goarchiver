@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,8 +21,6 @@ var (
 	IMPORT_REGEX = regexp.MustCompile(`@import\s+(?:url\(\s*(?:'([^']*)'|"([^"]*)"|([^)\s]+))\s*\)|'([^']*)'|"([^"]*)")`)
 
 	DOMAIN_WHITELIST = []string{
-		"thevalleyofcode.com",
-		"pro.thevalleyofcode.com",
 		"fonts.googleapis.com",
 		"fonts.gstatic.com",
 	}
@@ -206,6 +205,26 @@ func Archive(client *warc.CustomHTTPClient, url string) ([]string, error) {
 }
 
 func main() {
+	var whitelist string
+	var start string
+
+	flag.StringVar(&whitelist, "whitelist", "", "Whitelist domains")
+	flag.StringVar(&start, "start", "", "Starting URLs")
+	flag.Parse()
+
+	DOMAIN_WHITELIST = strings.Split(whitelist, ",")
+	startList := strings.Split(start, ",")
+
+	if len(start) == 0 {
+		fmt.Println("No starting points found")
+		return
+	}
+
+	if len(DOMAIN_WHITELIST) == 1 {
+		fmt.Println("No domain whitelisted")
+		return
+	}
+
 	rotatorSettings := &warc.RotatorSettings{
 		WarcinfoContent: warc.Header{
 			"software": "GoArchiver/1.0",
@@ -242,7 +261,7 @@ func main() {
 	}
 	defer client.Close()
 
-	queue := []string{"https://thevalleyofcode.com/"}
+	queue := startList
 	seen := make(map[string]struct{})
 	enqueued := make(map[string]struct{})
 	enqueued[queue[0]] = struct{}{}
