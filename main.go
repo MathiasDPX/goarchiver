@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -16,6 +18,13 @@ var (
 	// thxx chatgpt
 	URL_REGEX    = regexp.MustCompile(`url\(\s*(?:'([^']*)'|"([^"]*)"|([^)\s]+))\s*\)`)
 	IMPORT_REGEX = regexp.MustCompile(`@import\s+(?:url\(\s*(?:'([^']*)'|"([^"]*)"|([^)\s]+))\s*\)|'([^']*)'|"([^"]*)")`)
+
+	DOMAIN_WHITELIST = []string{
+		"thevalleyofcode.com",
+		"pro.thevalleyofcode.com",
+		"fonts.googleapis.com",
+		"fonts.gstatic.com",
+	}
 )
 
 func ExtractCSSLinks(body string) []string {
@@ -34,7 +43,6 @@ func ExtractCSSLinks(body string) []string {
 		result = append(result, link)
 	}
 
-	fmt.Println(result)
 	return result
 }
 
@@ -84,7 +92,7 @@ func ExtractHTMLLinks(body string) []string {
 				}
 			case "link":
 				rel := strings.ToLower(getAttr(n, "rel"))
-				if rel != "dns-prefetch" {
+				if rel != "dns-prefetch" && rel != "preconnect" {
 					if href := getAttr(n, "href"); href != "" {
 						links[href] = struct{}{}
 					}
@@ -110,24 +118,69 @@ func ExtractHTMLLinks(body string) []string {
 	return result
 }
 
-func Archive(client *warc.CustomHTTPClient, url string) []string {
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		panic(err)
+func resolveURL(baseURL, href string) (string, bool) {
+	href = strings.TrimSpace(href)
+	if href == "" {
+		return "", false
 	}
 
-	feedbackChan := make(chan struct{}, 1)
-	req = req.WithContext(warc.WithFeedbackChannel(req.Context(), feedbackChan))
+	if strings.HasPrefix(href, "data:") || strings.HasPrefix(href, "javascript:") || strings.HasPrefix(href, "#") {
+		return "", false
+	}
+
+	if strings.HasPrefix(href, "//") {
+		bu, err := url.Parse(baseURL)
+		if err != nil || bu.Scheme == "" {
+			return "", false
+		}
+
+		return bu.Scheme + ":" + href, true
+	}
+
+	hu, err := url.Parse(href)
+	if err != nil {
+		return "", false
+	}
+
+	// remove fragment like #
+	hu.Fragment = ""
+
+	if hu.IsAbs() {
+		if !slices.Contains(DOMAIN_WHITELIST, hu.Host) {
+			return "", false
+		}
+		return hu.String(), true
+	}
+
+	bu, err := url.Parse(baseURL)
+	if err != nil {
+		return "", false
+	}
+
+	resolved := bu.ResolveReference(hu)
+
+	if !slices.Contains(DOMAIN_WHITELIST, resolved.Host) {
+		return "", false
+	}
+
+	return resolved.String(), true
+}
+
+func Archive(client *warc.CustomHTTPClient, url string) ([]string, error) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	var links []string
@@ -138,9 +191,18 @@ func Archive(client *warc.CustomHTTPClient, url string) []string {
 		links = ExtractHTMLLinks(string(body))
 	}
 
-	<-feedbackChan
+	normalized := make([]string, 0, len(links))
+	seen := make(map[string]struct{})
+	for _, l := range links {
+		if abs, ok := resolveURL(url, l); ok {
+			if _, dup := seen[abs]; !dup {
+				seen[abs] = struct{}{}
+				normalized = append(normalized, abs)
+			}
+		}
+	}
 
-	return links
+	return normalized, nil
 }
 
 func main() {
@@ -180,5 +242,35 @@ func main() {
 	}
 	defer client.Close()
 
-	Archive(client, "https://thevalleyofcode.com/")
+	queue := []string{"https://thevalleyofcode.com/"}
+	seen := make(map[string]struct{})
+	enqueued := make(map[string]struct{})
+	enqueued[queue[0]] = struct{}{}
+
+	for len(queue) > 0 {
+		element := queue[0]
+		queue = queue[1:]
+
+		if _, ok := seen[element]; ok {
+			continue
+		}
+
+		links, err := Archive(client, element)
+
+		if err != nil {
+			fmt.Printf("Archive error: %v\n", err)
+		}
+
+		for _, l := range links {
+			if _, wasQueued := enqueued[l]; wasQueued {
+				continue
+			}
+			queue = append(queue, l)
+			enqueued[l] = struct{}{}
+		}
+
+		seen[element] = struct{}{}
+
+		fmt.Printf("[%d] Archived %s\n", len(queue), element)
+	}
 }
