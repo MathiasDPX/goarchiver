@@ -1,1 +1,2 @@
-WARC-*
+*.gz
+__pycache__
