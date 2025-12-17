@@ -24,6 +24,8 @@ var (
 		"fonts.googleapis.com",
 		"fonts.gstatic.com",
 	}
+
+	refusedDomains = make(map[string][]string)
 )
 
 func ExtractCSSLinks(body string) []string {
@@ -146,6 +148,7 @@ func resolveURL(baseURL, href string) (string, bool) {
 
 	if hu.IsAbs() {
 		if !slices.Contains(DOMAIN_WHITELIST, hu.Host) {
+			refusedDomains[hu.Host] = append(refusedDomains[hu.Host], hu.String())
 			return "", false
 		}
 		return hu.String(), true
@@ -159,6 +162,7 @@ func resolveURL(baseURL, href string) (string, bool) {
 	resolved := bu.ResolveReference(hu)
 
 	if !slices.Contains(DOMAIN_WHITELIST, resolved.Host) {
+		refusedDomains[resolved.Host] = append(refusedDomains[resolved.Host], resolved.String())
 		return "", false
 	}
 
@@ -207,9 +211,11 @@ func Archive(client *warc.CustomHTTPClient, url string) ([]string, error) {
 func main() {
 	var whitelist string
 	var start string
+	var report bool
 
 	flag.StringVar(&whitelist, "whitelist", "", "Whitelist domains")
 	flag.StringVar(&start, "start", "", "Starting URLs")
+	flag.BoolVar(&report, "report", false, "Show report of refused domains")
 	flag.Parse()
 
 	DOMAIN_WHITELIST = strings.Split(whitelist, ",")
@@ -291,5 +297,15 @@ func main() {
 		seen[element] = struct{}{}
 
 		fmt.Printf("[%d] Archived %s\n", len(queue), element)
+	}
+
+	if report && len(refusedDomains) > 0 {
+		fmt.Println("\nRefused domains from whitelist:")
+		for domain, urls := range refusedDomains {
+			fmt.Printf("- %s (%d times)\n", domain, len(urls))
+			for _, u := range urls {
+				fmt.Printf("    - %s\n", u)
+			}
+		}
 	}
 }
