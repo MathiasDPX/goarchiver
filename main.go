@@ -99,8 +99,9 @@ func ExtractHTMLLinks(body string) []string {
 					}
 				}
 			case "a":
-				href := getAttr(n, "href")
-				links[href] = struct{}{}
+				if href := getAttr(n, "href"); href != "" {
+					links[href] = struct{}{}
+				}
 			}
 		}
 
