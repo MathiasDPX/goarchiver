@@ -12,6 +12,7 @@ import (
 	"time"
 
 	warc "github.com/internetarchive/gowarc"
+	"github.com/miekg/dns"
 	"golang.org/x/net/html"
 )
 
@@ -240,9 +241,18 @@ func main() {
 		WARCWriterPoolSize: 1,
 	}
 
+	dnsFallback := &dns.ClientConfig{
+		Servers:  []string{"1.1.1.1", "1.0.0.1"}, // Cloudflare DNS
+		Port:     "53",
+		Ndots:    1,
+		Timeout:  5,
+		Attempts: 1,
+	}
+
 	clientSettings := warc.HTTPClientSettings{
 		RotatorSettings: rotatorSettings,
-		DNSServers:      []string{"1.1.1.1", "1.0.0.1"},
+		DNSServers:      dnsFallback.Servers,
+		DNSFallback:     dnsFallback,
 		DedupeOptions: warc.DedupeOptions{
 			LocalDedupe:   true,
 			CDXDedupe:     false,
