@@ -176,6 +176,8 @@ func Archive(client *warc.CustomHTTPClient, url string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0")
 
 	resp, err := client.Do(req)
 	if err != nil {
